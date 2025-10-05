@@ -1,4 +1,8 @@
-/* src/ls-v1.0.0.c  -- ls v1.1.0 (long listing with -l using getopt) */
+/* src/ls-v1.0.0.c  -- ls v1.2.0
+   Adds column display (down-then-across) for default listing (no -l).
+   Keep -l long listing behavior from v1.1.0.
+*/
+
 #define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,6 +11,7 @@
 #include <dirent.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
 #include <pwd.h>
 #include <grp.h>
@@ -14,8 +19,11 @@
 #include <limits.h>
 #include <stdint.h>
 #include <getopt.h>
+#include <math.h>
 
 #define SIX_MONTHS_SECONDS (15552000) /* ~ 6*30*24*3600 */
+#define COLUMN_SPACING 2              /* spaces between columns */
+#define FALLBACK_TERM_WIDTH 80
 
 typedef struct {
     char *name;
@@ -23,6 +31,8 @@ typedef struct {
     struct stat st;
     char *link_target;
 } FileEntry;
+
+/* ---------- utilities from v1.1.0 ---------- */
 
 void mode_to_perm(mode_t mode, char out[11]) {
     out[0] = S_ISREG(mode) ? '-' :
@@ -65,21 +75,15 @@ int cmp_fileentry(const void *a, const void *b) {
 void format_mtime(time_t mtime, char *buf, size_t bufsz) {
     struct tm tm;
     localtime_r(&mtime, &tm);
-    /* use ctime_r as the assignment asked to use ctime (we still use strftime for final layout) */
-    char ctime_buf[26];
-    if (ctime_r(&mtime, ctime_buf) == NULL) {
-        /* fallback: format via strftime */
-        strftime(buf, bufsz, "%b %e %H:%M", &tm);
-        return;
-    }
-
     time_t now = time(NULL);
     if (llabs(now - mtime) > SIX_MONTHS_SECONDS || mtime > now + 60) {
-        strftime(buf, bufsz, "%b %e  %Y", &tm); /* two spaces before year to align like GNU ls */
+        strftime(buf, bufsz, "%b %e  %Y", &tm);
     } else {
         strftime(buf, bufsz, "%b %e %H:%M", &tm);
     }
 }
+
+/* ---------- directory reading ---------- */
 
 int read_directory(const char *dirpath, FileEntry **out_entries) {
     DIR *d = opendir(dirpath);
@@ -137,6 +141,8 @@ void free_entries(FileEntry *arr, int n) {
     }
     free(arr);
 }
+
+/* ---------- long listing (unchanged) ---------- */
 
 int print_long_listing(const char *dirpath) {
     FileEntry *entries = NULL;
@@ -212,36 +218,99 @@ int print_long_listing(const char *dirpath) {
     return 0;
 }
 
-int print_simple(const char *dirpath) {
+/* ---------- new column printing (down then across) ---------- */
+
+/* get terminal width in columns; fallback to 80 if not a tty or ioctl fails */
+int get_terminal_width(void) {
+    struct winsize ws;
+    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return (int)ws.ws_col;
+    }
+    return FALLBACK_TERM_WIDTH;
+}
+
+/* print names in columns (down then across) */
+int print_columns(const char *dirpath) {
     FileEntry *entries = NULL;
     int n = read_directory(dirpath, &entries);
     if (n < 0) {
         fprintf(stderr, "Cannot read directory '%s': %s\n", dirpath, strerror(errno));
         return -1;
     }
+    if (n == 0) { free_entries(entries, n); return 0; }
+
     qsort(entries, n, sizeof(FileEntry), cmp_fileentry);
-    for (int i = 0; i < n; ++i) printf("%s\n", entries[i].name);
+
+    /* gather names and longest length */
+    char **names = malloc(n * sizeof(char*));
+    if (!names) { free_entries(entries, n); return -1; }
+    int maxlen = 0;
+    for (int i = 0; i < n; ++i) {
+        names[i] = entries[i].name; /* reuse pointer from entries */
+        int L = (int)strlen(names[i]);
+        if (L > maxlen) maxlen = L;
+    }
+
+    /* if output is not a terminal, fallback to single-column (common behavior) */
+    if (!isatty(STDOUT_FILENO)) {
+        for (int i = 0; i < n; ++i) printf("%s\n", names[i]);
+        free(names);
+        free_entries(entries, n);
+        return 0;
+    }
+
+    int term_width = get_terminal_width();
+    int col_width = maxlen + COLUMN_SPACING;
+    if (col_width <= 0) col_width = 1;
+    int cols = term_width / col_width;
+    if (cols < 1) cols = 1;
+    if (cols > n) cols = n;
+
+    /* compute rows: ceil(n / cols) */
+    int rows = (n + cols - 1) / cols;
+
+    /* print row by row: down-then-across */
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
+            int idx = c * rows + r; /* mapping for down-then-across */
+            if (idx >= n) continue;
+            /* for last column, we don't need extra spaces after name */
+            if (c == cols - 1) {
+                printf("%s", names[idx]);
+            } else {
+                /* pad name to maxlen + COLUMN_SPACING */
+                int pad = maxlen - (int)strlen(names[idx]) + COLUMN_SPACING;
+                printf("%s", names[idx]);
+                for (int p = 0; p < pad; ++p) putchar(' ');
+            }
+        }
+        putchar('\n');
+    }
+
+    free(names);
     free_entries(entries, n);
     return 0;
 }
 
+/* ---------- main and dispatch ---------- */
+
 int main(int argc, char **argv) {
     int longflag = 0;
+ /* int recflag = 0;  keep for future -R support if needed */
     int opt;
-    /* parse -l using getopt */
-    while ((opt = getopt(argc, argv, "l")) != -1) {
+    while ((opt = getopt(argc, argv, "lR")) != -1) {
         switch (opt) {
             case 'l': longflag = 1; break;
+         /* case 'R': recflag = 1; break;*/
             default:
-                fprintf(stderr, "Usage: %s [-l] [file...|dir...]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-l] [-R] [file...|dir...]\n", argv[0]);
                 return 1;
         }
     }
 
-    /* remaining args are paths starting at argv[optind] */
     if (optind == argc) {
         if (longflag) return print_long_listing(".");
-        else return print_simple(".");
+        else return print_columns(".");
     }
 
     int many = (argc - optind) > 1;
@@ -251,11 +320,11 @@ int main(int argc, char **argv) {
         if (lstat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
             if (many) printf("%s:\n", p);
             if (longflag) print_long_listing(p);
-            else print_simple(p);
+            else print_columns(p);
             if (i + 1 < argc) printf("\n");
         } else if (lstat(p, &st) == 0) {
             if (longflag) {
-                /* print single-file long listing */
+                /* single file long listing (reuse existing logic) */
                 FileEntry fe;
                 memset(&fe, 0, sizeof(fe));
                 fe.name = strdup(p);
