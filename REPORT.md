@@ -64,3 +64,4 @@ if (st.st_mode & S_IXOTH) {
 Using bitwise operators allows us to extract file type and permissions individually from st_mode. This is how the ls -l command prints the familiar drwxr-xr-x style output.
 
 
+
