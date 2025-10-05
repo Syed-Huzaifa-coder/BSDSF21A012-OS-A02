@@ -292,24 +292,91 @@ int print_columns(const char *dirpath) {
     return 0;
 }
 
+void display_horizontal(char **names, int count, int maxlen, int term_width) {
+    int col_width = maxlen + 2;  // filename length + spacing
+    int pos = 0;  // track current width position
+
+    for (int i = 0; i < count; i++) {
+        // If next filename won't fit in current row, start a new line
+        if (pos + col_width > term_width) {
+            printf("\n");
+            pos = 0;
+        }
+
+        // Print filename padded to column width
+        printf("%-*s", col_width, names[i]);
+        pos += col_width;
+    }
+    printf("\n");  // final newline
+}
+
+int print_horizontal(const char *path) {
+    DIR *dir = opendir(path);
+    if (!dir) {
+        fprintf(stderr, "Cannot open directory '%s': %s\n", path, strerror(errno));
+        return 1;
+    }
+
+    // Step 1: collect filenames
+    char **names = NULL;
+    int count = 0, capacity = 0;
+    struct dirent *entry;
+    int maxlen = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] == '.') continue; // skip hidden files
+
+        if (count >= capacity) {
+            capacity = capacity ? capacity * 2 : 16;
+            names = realloc(names, capacity * sizeof(char *));
+        }
+        names[count] = strdup(entry->d_name);
+        int len = strlen(entry->d_name);
+        if (len > maxlen) maxlen = len;
+        count++;
+    }
+    closedir(dir);
+
+    // Step 2: get terminal width
+    struct winsize ws;
+    int term_width = 80; // default fallback
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        term_width = ws.ws_col;
+    }
+
+    // Step 3: display horizontally
+    if (count > 0)
+        display_horizontal(names, count, maxlen, term_width);
+
+    // Cleanup
+    for (int i = 0; i < count; i++) free(names[i]);
+    free(names);
+
+    return 0;
+}
+
+
 /* ---------- main and dispatch ---------- */
 
 int main(int argc, char **argv) {
     int longflag = 0;
- /* int recflag = 0;  keep for future -R support if needed */
+    int xflag = 0;   // NEW: horizontal flag
+
     int opt;
-    while ((opt = getopt(argc, argv, "lR")) != -1) {
+    while ((opt = getopt(argc, argv, "lRx")) != -1) {  // added x
         switch (opt) {
             case 'l': longflag = 1; break;
-         /* case 'R': recflag = 1; break;*/
+            case 'x': xflag = 1; break;
+            /* case 'R': recflag = 1; break; */
             default:
-                fprintf(stderr, "Usage: %s [-l] [-R] [file...|dir...]\n", argv[0]);
+                fprintf(stderr, "Usage: %s [-l] [-R] [-x] [file...|dir...]\n", argv[0]);
                 return 1;
         }
     }
 
     if (optind == argc) {
         if (longflag) return print_long_listing(".");
+        else if (xflag) return print_horizontal(".");   // NEW dispatch
         else return print_columns(".");
     }
 
@@ -317,14 +384,18 @@ int main(int argc, char **argv) {
     for (int i = optind; i < argc; ++i) {
         const char *p = argv[i];
         struct stat st;
+
         if (lstat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
             if (many) printf("%s:\n", p);
+
             if (longflag) print_long_listing(p);
+            else if (xflag) print_horizontal(p);   // NEW dispatch
             else print_columns(p);
+
             if (i + 1 < argc) printf("\n");
         } else if (lstat(p, &st) == 0) {
             if (longflag) {
-                /* single file long listing (reuse existing logic) */
+                // existing single-file long listing logic…
                 FileEntry fe;
                 memset(&fe, 0, sizeof(fe));
                 fe.name = strdup(p);
@@ -363,7 +434,7 @@ int main(int argc, char **argv) {
                 }
                 free(fe.name); free(fe.path); if (fe.link_target) free(fe.link_target);
             } else {
-                printf("%s\n", p);
+                printf("%s\n", p);  // single file default/horizontal both just print name
             }
         } else {
             fprintf(stderr, "Cannot access '%s': %s\n", p, strerror(errno));
