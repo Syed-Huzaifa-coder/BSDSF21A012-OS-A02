@@ -1,7 +1,4 @@
-/* src/ls-v1.0.0.c  -- ls v1.2.0
-   Adds column display (down-then-across) for default listing (no -l).
-   Keep -l long listing behavior from v1.1.0.
-*/
+/* ls-v1.2.0.c -- Complete version with all features */
 
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -21,8 +18,8 @@
 #include <getopt.h>
 #include <math.h>
 
-#define SIX_MONTHS_SECONDS (15552000) /* ~ 6*30*24*3600 */
-#define COLUMN_SPACING 2              /* spaces between columns */
+#define SIX_MONTHS_SECONDS (15552000) /* ~6*30*24*3600 */
+#define COLUMN_SPACING 2
 #define FALLBACK_TERM_WIDTH 80
 
 typedef struct {
@@ -32,8 +29,20 @@ typedef struct {
     char *link_target;
 } FileEntry;
 
-/* ---------- utilities from v1.1.0 ---------- */
+/* ---------- Comparison for qsort ---------- */
+int cmp_fileentry(const void *a, const void *b) {
+    const FileEntry *A = (const FileEntry *)a;
+    const FileEntry *B = (const FileEntry *)b;
+    return strcmp(A->name, B->name);
+}
 
+int cmpstring(const void *a, const void *b) {
+    const char *str1 = *(const char **)a;
+    const char *str2 = *(const char **)b;
+    return strcmp(str1, str2);
+}
+
+/* ---------- Utilities ---------- */
 void mode_to_perm(mode_t mode, char out[11]) {
     out[0] = S_ISREG(mode) ? '-' :
              S_ISDIR(mode) ? 'd' :
@@ -66,12 +75,6 @@ int digits_unsigned(unsigned long long v) {
     return d;
 }
 
-int cmp_fileentry(const void *a, const void *b) {
-    const FileEntry *A = a;
-    const FileEntry *B = b;
-    return strcmp(A->name, B->name);
-}
-
 void format_mtime(time_t mtime, char *buf, size_t bufsz) {
     struct tm tm;
     localtime_r(&mtime, &tm);
@@ -83,8 +86,7 @@ void format_mtime(time_t mtime, char *buf, size_t bufsz) {
     }
 }
 
-/* ---------- directory reading ---------- */
-
+/* ---------- Directory reading ---------- */
 int read_directory(const char *dirpath, FileEntry **out_entries) {
     DIR *d = opendir(dirpath);
     if (!d) return -1;
@@ -142,8 +144,7 @@ void free_entries(FileEntry *arr, int n) {
     free(arr);
 }
 
-/* ---------- long listing (unchanged) ---------- */
-
+/* ---------- Long listing (-l) ---------- */
 int print_long_listing(const char *dirpath) {
     FileEntry *entries = NULL;
     int n = read_directory(dirpath, &entries);
@@ -153,6 +154,7 @@ int print_long_listing(const char *dirpath) {
     }
     if (n == 0) { free_entries(entries, n); return 0; }
 
+    /* Sort alphabetically */
     qsort(entries, n, sizeof(FileEntry), cmp_fileentry);
 
     int max_nlink_w = 0, max_owner_w = 0, max_group_w = 0, max_size_w = 0;
@@ -173,8 +175,7 @@ int print_long_listing(const char *dirpath) {
         total_blocks += (unsigned long long)st->st_blocks;
     }
 
-    unsigned long long total_1k = total_blocks / 2ULL;
-    printf("total %llu\n", total_1k);
+    printf("total %llu\n", total_blocks / 2ULL);
 
     for (int i = 0; i < n; ++i) {
         char perm[11];
@@ -194,23 +195,14 @@ int print_long_listing(const char *dirpath) {
 
         if (entries[i].link_target) {
             printf("%s %*llu %-*s %-*s %*lld %s %s -> %s\n",
-                   perm,
-                   max_nlink_w, nlink,
-                   max_owner_w, ownerbuf,
-                   max_group_w, groupbuf,
-                   max_size_w, (long long)entries[i].st.st_size,
-                   timebuf,
-                   entries[i].name,
-                   entries[i].link_target);
+                   perm, max_nlink_w, nlink, max_owner_w, ownerbuf,
+                   max_group_w, groupbuf, max_size_w, (long long)entries[i].st.st_size,
+                   timebuf, entries[i].name, entries[i].link_target);
         } else {
             printf("%s %*llu %-*s %-*s %*lld %s %s\n",
-                   perm,
-                   max_nlink_w, nlink,
-                   max_owner_w, ownerbuf,
-                   max_group_w, groupbuf,
-                   max_size_w, (long long)entries[i].st.st_size,
-                   timebuf,
-                   entries[i].name);
+                   perm, max_nlink_w, nlink, max_owner_w, ownerbuf,
+                   max_group_w, groupbuf, max_size_w, (long long)entries[i].st.st_size,
+                   timebuf, entries[i].name);
         }
     }
 
@@ -218,43 +210,30 @@ int print_long_listing(const char *dirpath) {
     return 0;
 }
 
-/* ---------- new column printing (down then across) ---------- */
-
-/* get terminal width in columns; fallback to 80 if not a tty or ioctl fails */
+/* ---------- Terminal width ---------- */
 int get_terminal_width(void) {
     struct winsize ws;
-    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+    if (isatty(STDOUT_FILENO) && ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
         return (int)ws.ws_col;
-    }
     return FALLBACK_TERM_WIDTH;
 }
 
-/* print names in columns (down then across) */
+/* ---------- Column display (down-then-across) ---------- */
 int print_columns(const char *dirpath) {
     FileEntry *entries = NULL;
     int n = read_directory(dirpath, &entries);
-    if (n < 0) {
-        fprintf(stderr, "Cannot read directory '%s': %s\n", dirpath, strerror(errno));
-        return -1;
-    }
-    if (n == 0) { free_entries(entries, n); return 0; }
+    if (n <= 0) { if (entries) free_entries(entries, n); return 0; }
 
     qsort(entries, n, sizeof(FileEntry), cmp_fileentry);
 
-    /* gather names and longest length */
-    char **names = malloc(n * sizeof(char*));
-    if (!names) { free_entries(entries, n); return -1; }
     int maxlen = 0;
     for (int i = 0; i < n; ++i) {
-        names[i] = entries[i].name; /* reuse pointer from entries */
-        int L = (int)strlen(names[i]);
+        int L = (int)strlen(entries[i].name);
         if (L > maxlen) maxlen = L;
     }
 
-    /* if output is not a terminal, fallback to single-column (common behavior) */
     if (!isatty(STDOUT_FILENO)) {
-        for (int i = 0; i < n; ++i) printf("%s\n", names[i]);
-        free(names);
+        for (int i = 0; i < n; i++) printf("%s\n", entries[i].name);
         free_entries(entries, n);
         return 0;
     }
@@ -265,180 +244,149 @@ int print_columns(const char *dirpath) {
     int cols = term_width / col_width;
     if (cols < 1) cols = 1;
     if (cols > n) cols = n;
-
-    /* compute rows: ceil(n / cols) */
     int rows = (n + cols - 1) / cols;
 
-    /* print row by row: down-then-across */
-    for (int r = 0; r < rows; ++r) {
-        for (int c = 0; c < cols; ++c) {
-            int idx = c * rows + r; /* mapping for down-then-across */
+    for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+            int idx = c * rows + r;
             if (idx >= n) continue;
-            /* for last column, we don't need extra spaces after name */
-            if (c == cols - 1) {
-                printf("%s", names[idx]);
-            } else {
-                /* pad name to maxlen + COLUMN_SPACING */
-                int pad = maxlen - (int)strlen(names[idx]) + COLUMN_SPACING;
-                printf("%s", names[idx]);
-                for (int p = 0; p < pad; ++p) putchar(' ');
-            }
+            printf("%-*s", (c == cols - 1) ? 0 : col_width, entries[idx].name);
         }
         putchar('\n');
     }
 
-    free(names);
     free_entries(entries, n);
     return 0;
 }
 
+/* ---------- Horizontal display (-x) ---------- */
 void display_horizontal(char **names, int count, int maxlen, int term_width) {
-    int col_width = maxlen + 2;  // filename length + spacing
-    int pos = 0;  // track current width position
-
+    int col_width = maxlen + COLUMN_SPACING;
+    int pos = 0;
     for (int i = 0; i < count; i++) {
-        // If next filename won't fit in current row, start a new line
         if (pos + col_width > term_width) {
             printf("\n");
             pos = 0;
         }
-
-        // Print filename padded to column width
         printf("%-*s", col_width, names[i]);
         pos += col_width;
     }
-    printf("\n");  // final newline
+    printf("\n");
 }
 
 int print_horizontal(const char *path) {
     DIR *dir = opendir(path);
-    if (!dir) {
-        fprintf(stderr, "Cannot open directory '%s': %s\n", path, strerror(errno));
-        return 1;
-    }
+    if (!dir) { fprintf(stderr, "Cannot open '%s': %s\n", path, strerror(errno)); return 1; }
 
-    // Step 1: collect filenames
     char **names = NULL;
     int count = 0, capacity = 0;
-    struct dirent *entry;
     int maxlen = 0;
+    struct dirent *entry;
 
     while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_name[0] == '.') continue; // skip hidden files
-
+        if (entry->d_name[0] == '.') continue;
         if (count >= capacity) {
             capacity = capacity ? capacity * 2 : 16;
             names = realloc(names, capacity * sizeof(char *));
         }
         names[count] = strdup(entry->d_name);
-        int len = strlen(entry->d_name);
+        int len = (int)strlen(entry->d_name);
         if (len > maxlen) maxlen = len;
         count++;
     }
     closedir(dir);
 
-    // Step 2: get terminal width
-    struct winsize ws;
-    int term_width = 80; // default fallback
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
-        term_width = ws.ws_col;
-    }
+    int term_width = get_terminal_width();
+    if (count > 0) display_horizontal(names, count, maxlen, term_width);
 
-    // Step 3: display horizontally
-    if (count > 0)
-        display_horizontal(names, count, maxlen, term_width);
-
-    // Cleanup
     for (int i = 0; i < count; i++) free(names[i]);
     free(names);
-
     return 0;
 }
 
-
 /* ---------- main and dispatch ---------- */
-
 int main(int argc, char **argv) {
-    int longflag = 0;
-    int xflag = 0;   // NEW: horizontal flag
-
+    int lflag = 0, xflag = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "lRx")) != -1) {  // added x
+
+    /* Parse options (-l and -x) */
+    while ((opt = getopt(argc, argv, "lx")) != -1) {
         switch (opt) {
-            case 'l': longflag = 1; break;
+            case 'l': lflag = 1; break;
             case 'x': xflag = 1; break;
-            /* case 'R': recflag = 1; break; */
             default:
-                fprintf(stderr, "Usage: %s [-l] [-R] [-x] [file...|dir...]\n", argv[0]);
-                return 1;
+                fprintf(stderr, "Usage: %s [-l] [-x] [files...]\n", argv[0]);
+                exit(EXIT_FAILURE);
         }
     }
 
-    if (optind == argc) {
-        if (longflag) return print_long_listing(".");
-        else if (xflag) return print_horizontal(".");   // NEW dispatch
-        else return print_columns(".");
-    }
+    /* If no arguments, list current directory */
+    if (optind == argc) argv[argc++] = ".";
 
-    int many = (argc - optind) > 1;
-    for (int i = optind; i < argc; ++i) {
-        const char *p = argv[i];
+    /* Loop over all paths (files/directories) */
+    for (int ai = optind; ai < argc; ai++) {
+        char *path = argv[ai];
         struct stat st;
 
-        if (lstat(p, &st) == 0 && S_ISDIR(st.st_mode)) {
-            if (many) printf("%s:\n", p);
+        if (lstat(path, &st) == -1) {
+            fprintf(stderr, "Cannot access '%s': %s\n", path, strerror(errno));
+            continue;
+        }
 
-            if (longflag) print_long_listing(p);
-            else if (xflag) print_horizontal(p);   // NEW dispatch
-            else print_columns(p);
-
-            if (i + 1 < argc) printf("\n");
-        } else if (lstat(p, &st) == 0) {
-            if (longflag) {
-                // existing single-file long listing logic…
-                FileEntry fe;
-                memset(&fe, 0, sizeof(fe));
-                fe.name = strdup(p);
-                fe.path = strdup(p);
-                if (lstat(fe.path, &fe.st) == 0) {
-                    if (S_ISLNK(fe.st.st_mode)) {
-                        char tmp[PATH_MAX+1];
-                        ssize_t r = readlink(fe.path, tmp, PATH_MAX);
-                        if (r >= 0) { tmp[r] = '\0'; fe.link_target = strdup(tmp); }
-                    }
-                    int nlink_w = digits_unsigned((unsigned long long)fe.st.st_nlink);
-                    struct passwd *pw = getpwuid(fe.st.st_uid);
-                    struct group *gr = getgrgid(fe.st.st_gid);
-                    int ow = pw ? (int)strlen(pw->pw_name) : digits_unsigned((unsigned long long)fe.st.st_uid);
-                    int gw = gr ? (int)strlen(gr->gr_name) : digits_unsigned((unsigned long long)fe.st.st_gid);
-                    int szw = digits_unsigned((unsigned long long)fe.st.st_size);
-                    char perm[11]; mode_to_perm(fe.st.st_mode, perm);
-                    char timebuf[64]; format_mtime(fe.st.st_mtime, timebuf, sizeof(timebuf));
-                    char ownerbuf[64], groupbuf[64];
-                    if (pw) snprintf(ownerbuf, sizeof(ownerbuf), "%s", pw->pw_name);
-                    else snprintf(ownerbuf, sizeof(ownerbuf), "%u", (unsigned)fe.st.st_uid);
-                    if (gr) snprintf(groupbuf, sizeof(groupbuf), "%s", gr->gr_name);
-                    else snprintf(groupbuf, sizeof(groupbuf), "%u", (unsigned)fe.st.st_gid);
-
-                    if (fe.link_target) {
-                        printf("%s %*llu %-*s %-*s %*lld %s %s -> %s\n",
-                               perm, nlink_w, (unsigned long long)fe.st.st_nlink,
-                               ow, ownerbuf, gw, groupbuf, szw, (long long)fe.st.st_size,
-                               timebuf, fe.name, fe.link_target);
-                    } else {
-                        printf("%s %*llu %-*s %-*s %*lld %s %s\n",
-                               perm, nlink_w, (unsigned long long)fe.st.st_nlink,
-                               ow, ownerbuf, gw, groupbuf, szw, (long long)fe.st.st_size,
-                               timebuf, fe.name);
-                    }
-                }
-                free(fe.name); free(fe.path); if (fe.link_target) free(fe.link_target);
+        if (S_ISDIR(st.st_mode)) {
+            /* Directory */
+            if (lflag) {
+                print_long_listing(path);
+            } else if (xflag) {
+                print_horizontal(path);
             } else {
-                printf("%s\n", p);  // single file default/horizontal both just print name
+                print_columns(path);
             }
         } else {
-            fprintf(stderr, "Cannot access '%s': %s\n", p, strerror(errno));
+            /* Single file */
+            if (lflag) {
+                /* long listing for single file */
+                FileEntry fe;
+                fe.name = path;
+                fe.path = path;
+                if (lstat(path, &fe.st) == -1) {
+                    fprintf(stderr, "Cannot stat '%s': %s\n", path, strerror(errno));
+                    continue;
+                }
+                fe.link_target = NULL;
+                if (S_ISLNK(fe.st.st_mode)) {
+                    char tmp[PATH_MAX+1];
+                    ssize_t r = readlink(path, tmp, PATH_MAX);
+                    if (r >= 0) {
+                        tmp[r] = '\0';
+                        fe.link_target = strdup(tmp);
+                    }
+                }
+                char perm[11], timebuf[64], ownerbuf[64], groupbuf[64];
+                mode_to_perm(fe.st.st_mode, perm);
+                struct passwd *pw = getpwuid(fe.st.st_uid);
+                struct group *gr = getgrgid(fe.st.st_gid);
+                if (pw) snprintf(ownerbuf, sizeof(ownerbuf), "%s", pw->pw_name);
+                else snprintf(ownerbuf, sizeof(ownerbuf), "%u", (unsigned)fe.st.st_uid);
+                if (gr) snprintf(groupbuf, sizeof(groupbuf), "%s", gr->gr_name);
+                else snprintf(groupbuf, sizeof(groupbuf), "%u", (unsigned)fe.st.st_gid);
+                format_mtime(fe.st.st_mtime, timebuf, sizeof(timebuf));
+
+                printf("%s %llu %-*s %-*s %lld %s %s",
+                       perm,
+                       (unsigned long long)fe.st.st_nlink,
+                       (int)strlen(ownerbuf), ownerbuf,
+                       (int)strlen(groupbuf), groupbuf,
+                       (long long)fe.st.st_size,
+                       timebuf, fe.name);
+                if (fe.link_target) printf(" -> %s", fe.link_target);
+                printf("\n");
+                if (fe.link_target) free(fe.link_target);
+            } else {
+                printf("%s\n", path);
+            }
         }
     }
+
     return 0;
 }
