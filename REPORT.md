@@ -98,6 +98,28 @@ After gathering filenames, the program checks this variable and calls the correc
 
 This ensures clean separation of logic and makes adding future modes easier.
 
+## Q7: Why is it necessary to read all directory entries into memory before you can sort them?
+
+Sorting requires access to the complete list of filenames.
+
+If you process entries one by one (streaming), you can’t reorder them without storing first.
+
+Drawback: For very large directories (millions of files), memory usage can be huge → may cause slowdowns or even out-of-memory errors.
+
+## Q8: Explain the purpose and signature of the comparison function required by qsort().
+
+qsort() needs to know how to compare two elements of your array.
+Its comparator must have this signature:
+
+int cmp(const void *a, const void *b);
+
+const void * is generic → allows qsort to work with any type (int, float, string, struct, etc.).
+Inside the comparator:
+You cast to your actual type (e.g., char** for strings).
+Return <0 if a<b, 0 if equal, >0 if a>b.
+For strings: we use strcmp().
+
+
 
 
 
