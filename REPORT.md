@@ -63,5 +63,27 @@ if (st.st_mode & S_IXOTH) {
 }
 Using bitwise operators allows us to extract file type and permissions individually from st_mode. This is how the ls -l command prints the familiar drwxr-xr-x style output.
 
+## Q3: Explain the general logic for printing items in a "down then across" columnar format. Why is a simple single loop insufficient?
+
+Logic (down then across):
+
+Determine total items N and the maximum filename length M.
+Compute terminal width W and decide col_width = M + spacing.
+Compute maximum number of columns C = max(1, W / col_width) and rows R = ceil(N / C).
+Print row by row: for each row index r (0..R-1) print items at indices r, r+R, r+2R, … (r + k*R) until >= N. Each printed item is padded to col_width (except last column).
+
+A simple single loop printing filenames sequentially (across rows) is insufficient because it fills rows left-to-right and produces a different ordering. The "down then across" layout requires computing the two-dimensional mapping between a linear list and a (rows × columns) grid and printing items in the row-major order that corresponds to filling columns top-to-bottom first. This ensures visually balanced columns and matches the behavior of the standard ls.
+
+## Q4: What is the purpose of the ioctl system call in this context? What are the limitations if you only used a fixed-width fallback?
+
+Purpose of ioctl:
+
+ioctl with TIOCGWINSZ requests the terminal's window size (number of columns) from the kernel. This allows your program to compute how many columns will fit on the current terminal width and adapt the layout dynamically to the user's environment.
+
+Limitations of fixed-width fallback:
+
+If you only use a fixed width (e.g., 80 columns), the output may under-utilize wide terminals (leaving unused horizontal space) or overflow narrow terminals, causing undesirable wrapping. Dynamic ioctl-based detection ensures the output uses the available space efficiently and behaves well when users resize their terminal windows.
+
+
 
 
