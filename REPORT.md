@@ -84,6 +84,21 @@ Limitations of fixed-width fallback:
 
 If you only use a fixed width (e.g., 80 columns), the output may under-utilize wide terminals (leaving unused horizontal space) or overflow narrow terminals, causing undesirable wrapping. Dynamic ioctl-based detection ensures the output uses the available space efficiently and behaves well when users resize their terminal windows.
 
+## Q5: Compare vertical vs horizontal complexity
+
+Vertical (down-then-across) requires pre-calculation of rows and careful index jumps like filenames[i + num_rows], so it’s more complex.
+
+Horizontal (-x) is simpler: you just print left to right, checking when to wrap. Only need to track current position vs terminal width.
+
+## Q6: Strategy for managing modes
+
+Used a single state variable (display_mode) set during argument parsing (-l → long listing, -x → horizontal, default → vertical).
+
+After gathering filenames, the program checks this variable and calls the correct function (display_long_listing, display_horizontal, or display_vertical).
+
+This ensures clean separation of logic and makes adding future modes easier.
+
+
 
 
 
