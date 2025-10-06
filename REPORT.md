@@ -119,6 +119,21 @@ You cast to your actual type (e.g., char** for strings).
 Return <0 if a<b, 0 if equal, >0 if a>b.
 For strings: we use strcmp().
 
+## Q9: How ANSI escape codes work
+
+They are sequences starting with \033[ (ESC character), followed by style codes.
+Example for green:
+
+printf("\033[0;32mThis text is green\033[0m\n");
+0 = reset style, 32 = green text, 0m = reset color to default.
+
+## Q 10: Executable file permission bits
+
+st_mode & S_IXUSR → executable by owner
+st_mode & S_IXGRP → executable by group
+st_mode & S_IXOTH → executable by others
+
+
 
 
 
