@@ -127,11 +127,29 @@ Example for green:
 printf("\033[0;32mThis text is green\033[0m\n");
 0 = reset style, 32 = green text, 0m = reset color to default.
 
-## Q 10: Executable file permission bits
+## Q10: Executable file permission bits
 
 st_mode & S_IXUSR → executable by owner
 st_mode & S_IXGRP → executable by group
 st_mode & S_IXOTH → executable by others
+
+## Q11: What is a "base case" in a recursive function?
+
+A base case is a condition that stops a recursive function from calling itself indefinitely. It provides an exit point for the recursion. Without a base case, the function would keep calling itself forever, leading to a stack overflow.
+
+In the context of our recursive ls (-R) implementation:
+The base case occurs when the function encounters a directory that has no subdirectories.
+At this point, the recursion stops, because there are no more subdirectories to list.
+
+## Q12: Why is it essential to construct a full path before making a recursive call?
+
+When recursively listing directories, each call must know the exact path of the subdirectory it needs to explore.
+If you construct the full path like "parent_dir/subdir", the function correctly accesses the subdirectory inside the parent directory.
+If you simply call do_ls("subdir") without the parent path, the function will look for subdir in the current working directory, not inside "parent_dir".
+This would either fail (if subdir isn’t in the current directory) or list the wrong directory.
+
+Summary: Full paths ensure the recursion navigates the actual directory tree correctly.
+
 
 
 
